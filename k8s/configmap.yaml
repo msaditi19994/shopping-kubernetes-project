@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+
+metadata:
+  name: shopping-config
+  namespace: shopping
+
+data:
+  ENVIRONMENT: "production"
+  BACKEND_URL: "http://shopping-backend-service:5000"
