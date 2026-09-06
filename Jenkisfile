@@ -1,0 +1,99 @@
+pipeline {
+
+    agent any
+
+    environment {
+        AWS_REGION = 'ap-south-1'
+        AWS_ACCOUNT_ID = 'YOUR_ACCOUNT_ID'
+
+        ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+
+        FRONTEND_REPO = "${ECR_REGISTRY}/frontend"
+        BACKEND_REPO = "${ECR_REGISTRY}/backend"
+
+        FRONTEND_IMAGE = "${FRONTEND_REPO}:${BUILD_NUMBER}"
+        BACKEND_IMAGE = "${BACKEND_REPO}:${BUILD_NUMBER}"
+
+        EKS_CLUSTER = 'YOUR-EKS-CLUSTER'
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo 'Running tests...'
+            }
+        }
+
+        stage('Build Frontend') {
+            steps {
+                dir('frontend') {
+                    sh 'docker build -t frontend:${BUILD_NUMBER} .'
+                }
+            }
+        }
+
+        stage('Build Backend') {
+            steps {
+                dir('backend') {
+                    sh 'docker build -t backend:${BUILD_NUMBER} .'
+                }
+            }
+        }
+
+        stage('Push Frontend → ECR') {
+            steps {
+                sh '''
+                    aws ecr get-login-password --region ${AWS_REGION} |
+                    docker login --username AWS --password-stdin ${ECR_REGISTRY}
+
+                    docker tag frontend:${BUILD_NUMBER} ${FRONTEND_IMAGE}
+
+                    docker push ${FRONTEND_IMAGE}
+                '''
+            }
+        }
+
+        stage('Push Backend → ECR') {
+            steps {
+                sh '''
+                    docker tag backend:${BUILD_NUMBER} ${BACKEND_IMAGE}
+
+                    docker push ${BACKEND_IMAGE}
+                '''
+            }
+        }
+
+        stage('Deploy → EKS') {
+            steps {
+                sh '''
+                    aws eks update-kubeconfig \
+                      --region ${AWS_REGION} \
+                      --name ${EKS_CLUSTER}
+
+                    kubectl create namespace myapp \
+                      --dry-run=client \
+                      -o yaml | kubectl apply -f -
+
+                    sed "s|FRONTEND_IMAGE|${FRONTEND_IMAGE}|g" \
+                      k8s/frontend-deployment.yaml | kubectl apply -f -
+
+                    sed "s|BACKEND_IMAGE|${BACKEND_IMAGE}|g" \
+                      k8s/backend-deployment.yaml | kubectl apply -f -
+
+                    kubectl apply -f k8s/frontend-service.yaml
+                    kubectl apply -f k8s/backend-service.yaml
+
+                    kubectl rollout status deployment/frontend -n myapp
+                    kubectl rollout status deployment/backend -n myapp
+                '''
+            }
+        }
+    }
+}
